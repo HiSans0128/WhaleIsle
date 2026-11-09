@@ -1,8 +1,8 @@
 {
   "name": "deepseek-harness-desktop",
-  "productName": "Whale Isle",
+  "productName": "SparkAtoll",
   "version": "0.3.9",
-  "description": "Whale Isle desktop app based on DeepSeek Harness",
+  "description": "SparkAtoll (星火环礁) desktop app based on DeepSeek Harness",
   "author": "Chisa",
   "license": "MIT",
   "main": "src/main/index.js",
@@ -70,7 +70,7 @@
   },
   "build": {
     "appId": "ai.deepseek.harness.gui",
-    "productName": "Whale Isle",
+    "productName": "SparkAtoll",
     "copyright": "MIT",
     "npmRebuild": false,
     "directories": {

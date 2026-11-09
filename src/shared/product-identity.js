@@ -3,8 +3,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const PRODUCT_NAME = 'Whale Isle';
-const LAUNCHER_NAME = 'Whale Isle Launcher';
+const PRODUCT_NAME = 'SparkAtoll';
+const LAUNCHER_NAME = 'SparkAtoll Launcher';
 const LEGACY_PRODUCT_NAME = 'Deepseek-Harness-Desktop';
 const LEGACY_DESKTOP_USER_DATA = LEGACY_PRODUCT_NAME;
 const LEGACY_LAUNCHER_USER_DATA = 'Deepseek-Harness-Launcher';

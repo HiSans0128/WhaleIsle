@@ -1,6 +1,7 @@
 const { app, BrowserView, BrowserWindow, shell, nativeImage, screen } = require('electron');
 const { attachRendererConsoleTail, RendererConsoleTail, writeCrashReport, desktopErrorState } = require('./crash-report');
 const { rendererFile, assetFile, preloadFile } = require('./paths');
+const { PRODUCT_NAME } = require('../shared/product-identity');
 const { applyWindowsAppDetails } = require('./window-app-details');
 const { REMOTE_FEATURE_ENABLED } = require('./config');
 const { shellWindowChrome, attachIntegratedChrome, hideNativeMenu, prepareHarnessChrome, syncHarnessChrome, currentTheme, markWindowTransparent, paintBackground } = require('./chrome');
@@ -207,6 +208,7 @@ function createMainWindow({ activate = true } = {}) {
 
   mainWindow = new BrowserWindow({
     ...shellWindowChrome({
+      title: PRODUCT_NAME,
       width: 1440,
       height: 920,
       minWidth: 960,
@@ -227,10 +229,27 @@ function createMainWindow({ activate = true } = {}) {
   attachWindowsAppDetails(mainWindow);
   markWindowTransparent(mainWindow);
   attachIntegratedChrome(mainWindow);
+  // The renderer page title is compiled into the harness client bundle and
+  // still says the upstream name; pin the window title to our brand instead.
+  mainWindow.on('page-title-updated', (event) => {
+    event.preventDefault();
+    mainWindow.setTitle(PRODUCT_NAME);
+  });
   mainWindow.once('ready-to-show', () => {
     hideNativeMenu(mainWindow);
+    mainWindow.setTitle(PRODUCT_NAME);
     if (activate) mainWindow.show();
     else mainWindow.showInactive();
+  });
+  // The harness client ships a static <title> with the upstream name;
+  // page-title-updated does not fire for it, so pin our brand after loads.
+  mainWindow.webContents.on('did-finish-load', () => {
+    mainWindow.setTitle(PRODUCT_NAME);
+    // Hidden title bar exposes the page document title to macOS AX; rewrite
+    // it so the window name carries our brand instead of the upstream one.
+    mainWindow.webContents
+      .executeJavaScript(`document.title = ${JSON.stringify(PRODUCT_NAME)};`)
+      .catch(() => {});
   });
   mainWindow.on('closed', () => {
     hideHarnessView(mainWindow);
@@ -647,6 +666,7 @@ function watchPluginBoot(view, win) {
 }
 
 function ensureHarnessView(win) {
+  try { require('node:fs').appendFileSync('/tmp/sparkatoll-inject.log', `[${new Date().toISOString()}] ensureHarnessView called\n`); } catch {}
   if (harnessView && !harnessView.webContents.isDestroyed()) {
     return harnessView;
   }
@@ -712,6 +732,88 @@ function ensureHarnessView(win) {
   harnessView.webContents.on('dom-ready', applyChrome);
   harnessView.webContents.on('did-navigate', applyChrome);
   harnessView.webContents.on('did-navigate-in-page', applyChrome);
+  // SparkAtoll design-spec layer: the harness UI bundle is compiled upstream
+  // and cannot carry our tokens, so inject the signature superellipse here.
+  // Re-inserted on every load/navigation since insertCSS is document-scoped.
+  const injectSparkAtollCss = () => {
+    try { require('node:fs').appendFileSync('/tmp/sparkatoll-inject.log', `[${new Date().toISOString()}] css inject fired\n`); } catch {}
+    if (!harnessView || harnessView.webContents.isDestroyed()) return;
+    harnessView.webContents
+      .insertCSS(
+        ':root{corner-shape:superellipse(1.5);}' +
+          '[class*="pill" i],[class*="dot" i],[class*="avatar" i]{corner-shape:round;}' +
+          '::-webkit-scrollbar-thumb{corner-shape:round;}'
+      )
+      .catch(() => {});
+  };
+  harnessView.webContents.on('did-finish-load', injectSparkAtollCss);
+  harnessView.webContents.on('dom-ready', injectSparkAtollCss);
+  // SparkAtoll brand layer: rewrite the upstream "Whale Isle" strings the
+  // compiled harness bundle renders (logo text, titles) to our brand. A
+  // MutationObserver keeps the replacement alive across React re-renders.
+  const injectSparkAtollBrand = () => {
+    try { require('node:fs').appendFileSync('/tmp/sparkatoll-inject.log', `[${new Date().toISOString()}] brand inject fired\n`); } catch {}
+    if (!harnessView || harnessView.webContents.isDestroyed()) return;
+    harnessView.webContents
+      .executeJavaScript(`(() => {
+        const brand = 'SparkAtoll';
+        const upstream = 'Whale Isle';
+        const legacy = '\u9cb8\u5c7f';
+        const localized = '\u661f\u706b\u73af\u7901';
+        const hits = { shallow: 0, deep: 0, attrs: 0 };
+        const swap = (s) => s.split(upstream).join(brand).split(legacy).join(localized);
+        const collect = (root, depth) => {
+          const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) {
+            const node = walker.currentNode;
+            if (node.nodeValue && (node.nodeValue.includes(upstream) || node.nodeValue.includes(legacy))) {
+              node.nodeValue = swap(node.nodeValue);
+              if (depth === 0) hits.shallow += 1; else hits.deep += 1;
+            }
+          }
+          const elems = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+          while (elems.nextNode()) {
+            const el = elems.currentNode;
+            if (depth === 0 && el.getAttribute) {
+              for (const a of ['title', 'aria-label', 'alt', 'placeholder']) {
+                const v = el.getAttribute(a);
+                if (v && (v.includes(upstream) || v.includes(legacy))) {
+                  el.setAttribute(a, swap(v));
+                  hits.attrs += 1;
+                }
+              }
+            }
+            if (el.shadowRoot) collect(el.shadowRoot, depth + 1);
+          }
+        };
+        const replace = () => {
+          document.title = brand;
+          hits.shallow = 0; hits.deep = 0; hits.attrs = 0;
+          collect(document.body || document.documentElement, 0);
+          return JSON.stringify(hits);
+        };
+        if (!window.__sparkatollBrandWatch) {
+          window.__sparkatollBrandWatch = true;
+          console.log('[SparkAtoll] brand watcher installed on', location.href);
+          new MutationObserver(replace).observe(document.body, {
+            childList: true,
+            subtree: true,
+            characterData: true,
+          });
+        }
+        return replace();
+      })();`, true)
+      .then((count) => {
+        try { require('node:fs').appendFileSync('/tmp/sparkatoll-inject.log', `[${new Date().toISOString()}] brand scan: ${count} replaced\n`); } catch {}
+        console.log(`[SparkAtoll] brand scan on harness view: ${count} text node(s) replaced`);
+      })
+      .catch((error) => {
+        console.log(`[SparkAtoll] brand injection failed: ${error && error.message}`);
+      });
+  };
+  harnessView.webContents.on('did-finish-load', injectSparkAtollBrand);
+  harnessView.webContents.on('dom-ready', injectSparkAtollBrand);
+  console.log('[SparkAtoll] harness-view brand hooks installed');
   if (!win._dshHarnessResizeBound) {
     win._dshHarnessResizeBound = true;
     const relayout = () => layoutHarnessView(win);
